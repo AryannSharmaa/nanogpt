@@ -21,9 +21,13 @@ train=data[:n]
 test=data[n:]
 
 iters=5000
-batch_size=32
-block_size=8
-n_embd=32
+batch_size=64
+block_size=128
+lr=3e-4
+n_embd=288
+n_head=6
+n_layer=6
+dropout=0.2
 
 def get_batch(split):
     data=train if split=="train" else test 
@@ -57,6 +61,8 @@ class Head(nn.Module):
         self.value=nn.Linear(n_embd,head_size,bias=False)
         self.register_buffer('tril',torch.tril(torch.ones(block_size,block_size)))
 
+        self.dropout=nn.Dropout(dropout)
+
     def forward(self,x):
         B,T,C=x.shape
         k=self.key(x)
@@ -65,6 +71,7 @@ class Head(nn.Module):
         wei=q@k.transpose(-2,-1) / C**0.5
         wei=wei.masked_fill(self.tril[:T,:T]==0,float('-inf'))
         wei=F.softmax(wei,dim=-1)
+        wei=self.dropout(wei)
         out=wei@v 
         return out 
     
@@ -73,9 +80,10 @@ class MultiHeadAttention(nn.Module):
         super().__init__()
         self.heads=nn.ModuleList([Head(head_size) for _ in range(num_heads)])
         self.proj=nn.Linear(n_embd,n_embd)
+        self.dropout=nn.Dropout(dropout)
     def forward(self,x):
         out=torch.cat([h(x) for h in self.heads],dim=-1)
-        out=self.proj(out)
+        out=self.dropout(self.proj(out))
         return out
 
 class FeedForward(nn.Module):
@@ -85,6 +93,7 @@ class FeedForward(nn.Module):
             nn.Linear(n_embd,4*n_embd),
             nn.ReLU(),
             nn.Linear(4*n_embd,n_embd),
+            nn.Dropout(dropout)
         )
     def forward(self,x):
         return self.net(x)
@@ -107,12 +116,8 @@ class BigramLanguageModel(nn.Module):
         super().__init__()
         self.token_embedding_table=nn.Embedding(vocab_size,n_embd)
         self.pos_embedding_table=nn.Embedding(block_size,n_embd)
-        self.blocks=nn.Sequential(
-            Block(n_embd,n_head=4),
-            Block(n_embd,n_head=4),
-            Block(n_embd,n_head=4),
-            nn.LayerNorm(n_embd),
-        )
+        self.blocks=nn.Sequential(*[Block(n_embd,n_head=n_head) for _ in range(n_layer)])
+        self.ln=nn.LayerNorm(n_embd)
         self.lm_head=nn.Linear(n_embd,vocab_size)
     def forward(self,idx,targets=None):
         B,T=idx.shape
@@ -143,7 +148,7 @@ class BigramLanguageModel(nn.Module):
     
 model=BigramLanguageModel()
 m=model.to(device)
-optimizer=torch.optim.AdamW(m.parameters(),lr=1e-3)
+optimizer=torch.optim.AdamW(m.parameters(),lr=lr)
 for steps in range(iters):
     if steps%1000==0:
         losses=estimate_loss()

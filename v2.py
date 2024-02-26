@@ -72,29 +72,34 @@ class MultiHeadAttention(nn.Module):
     def __init__(self,num_heads,head_size):
         super().__init__()
         self.heads=nn.ModuleList([Head(head_size) for _ in range(num_heads)])
-
+        self.proj=nn.Linear(n_embd,n_embd)
     def forward(self,x):
-        return torch.cat([h(x) for h in self.heads],dim=-1)
+        out=torch.cat([h(x) for h in self.heads],dim=-1)
+        out=self.proj(out)
+        return out
 
 class FeedForward(nn.Module):
     def __init__(self,n_embd):
         super().__init__()
         self.net=nn.Sequential(
-            nn.Linear(n_embd,n_embd),
-            nn.ReLU(n_embd),
+            nn.Linear(n_embd,4*n_embd),
+            nn.ReLU(),
+            nn.Linear(4*n_embd,n_embd),
         )
     def forward(self,x):
         return self.net(x)
 
 class Block(nn.Module):
     def __init__(self,n_embd,n_head):
-        super().__init()
+        super().__init__()
         head_size=n_embd//n_head
         self.sa=MultiHeadAttention(n_head,head_size)
         self.ffwd=FeedForward(n_embd)
+        self.ln1=nn.LayerNorm(n_embd)
+        self.ln2=nn.LayerNorm(n_embd)
     def forward(self,x):
-        x=self.sa(x)
-        x=self.ffwd(x)
+        x=x+self.sa(self.ln1(x))
+        x=x+self.ffwd(self.ln2(x))
         return x
 
 class BigramLanguageModel(nn.Module):
@@ -102,16 +107,19 @@ class BigramLanguageModel(nn.Module):
         super().__init__()
         self.token_embedding_table=nn.Embedding(vocab_size,n_embd)
         self.pos_embedding_table=nn.Embedding(block_size,n_embd)
-        self.sa_head=MultiHeadAttention(4,n_embd//4)
-        self.ffwd=FeedForward(n_embd)
+        self.blocks=nn.Sequential(
+            Block(n_embd,n_head=4),
+            Block(n_embd,n_head=4),
+            Block(n_embd,n_head=4),
+            nn.LayerNorm(n_embd),
+        )
         self.lm_head=nn.Linear(n_embd,vocab_size)
     def forward(self,idx,targets=None):
         B,T=idx.shape
         tok_emb=self.token_embedding_table(idx)
         pos_emb=self.pos_embedding_table(torch.arange(T,device=device))
         x=tok_emb+pos_emb 
-        x=self.sa_head(x)
-        x=self.ffwd(x)
+        x=self.blocks(x)
         logits=self.lm_head(x)
 
         if targets is None:
